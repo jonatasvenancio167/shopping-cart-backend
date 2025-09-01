@@ -6,7 +6,6 @@ class MarkCartAsAbandonedJob
     return unless cart && !cart.abandoned?
 
     cart.update!(
-      abandoned: true,
       abandoned_at: Time.current
     )
 
