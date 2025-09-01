@@ -1,9 +1,16 @@
 class CartsController < ApplicationController
-  before_action :find_cart_by_id, only: [:show, :remove_item]
   before_action :find_product, only: [:add_item, :remove_item]
+  before_action :find_cart_by_session, only: [:remove_item]
+  before_action :set_session_id_header
 
   # GET /cart
   def show
+    @cart = Cart.find_by(session_id: current_session_id)
+    
+    unless @cart
+      return render json: { error: 'Cart not found' }, status: :not_found
+    end
+    
     render json: {
       id: @cart.id,
       products: @cart.cart_items.includes(:product).map do |cart_item|
@@ -22,94 +29,17 @@ class CartsController < ApplicationController
   
   # POST /cart
   def create
-    session_id = SecureRandom.hex(16)
-    @cart = Cart.new(session_id: session_id)
-    @cart.total_price = 0
-    
-    unless @cart.save
-      render json: { errors: @cart.errors.full_messages }, status: :unprocessable_entity
-      return
-    end
-    
-    event_store.publish(
-      CartCreated.new(data: {
-        cart_id: @cart.id,
-        session_id: @cart.session_id,
-        created_at: @cart.created_at
-      })
-    )
-    
-    if params[:product_id].present?
-      product = Product.find_by(id: params[:product_id])
-      
-      if product.nil?
-        render json: { error: 'Product not found' }, status: :not_found
-        return
-      end
-      
-      quantity = params[:quantity] || 1
-      cart_item = @cart.cart_items.find_by(product: product)
-      
-      if cart_item
-        cart_item.quantity += quantity.to_i
-        cart_item.save!
-      else
-        @cart.cart_items.create!(product: product, quantity: quantity.to_i)
-      end
-      
-      event_store.publish(
-        ItemAddedToCart.new(data: {
-          cart_id: @cart.id,
-          product_id: product.id,
-          product_name: product.name,
-          quantity: quantity.to_i,
-          unit_price: product.price.to_f
-        })
-      )
-    end
-    
-    render json: {
-      id: @cart.id,
-      products: @cart.cart_items.includes(:product).map do |item|
-        {
-          id: item.product.id,
-          name: item.product.name,
-          quantity: item.quantity,
-          unit_price: item.product.price.to_f,
-          total_price: (item.product.price * item.quantity).to_f
-        }
-      end,
-      total_price: @cart.cart_items.joins(:product).sum('products.price * cart_items.quantity').to_f
-    }, status: :created
-  end
-
-  # POST /cart/add_item
-  def add_item
-    quantity = add_item_params[:quantity] || 1
-    cart_id = add_item_params[:cart_id]
-    
-    if quantity <= 0
-      return render json: { errors: ['Quantity must be greater than 0'] }, status: :unprocessable_entity
-    end
-    
     begin
-      if cart_id.present?
-        @cart = Cart.find(cart_id)
-        cart_created = false
-      else
-        session_id = session.id.to_s.presence || SecureRandom.hex(16)
-        @cart = Cart.find_by(session_id: session_id)
-        
-        if @cart.nil?
-          @cart = Cart.create!(session_id: session_id, total_price: 0)
-          session[:cart_id] = @cart.id
-          cart_created = true
-        else
-          cart_created = false
-        end
+      unless params[:product_id].present?
+        return render json: { error: 'Product ID is required' }, status: :bad_request
       end
       
-      @cart.add_product(@product, quantity)
+      @product = Product.find(params[:product_id])
+      quantity = params[:quantity]&.to_i || 1
+      
+      session_id = current_session_id
+      
+      @cart = Cart.create!(session_id: session_id, total_price: 0)
       
       event_store.publish(
         CartCreated.new(data: {
@@ -118,6 +48,8 @@ class CartsController < ApplicationController
           created_at: @cart.created_at
         })
       )
+      
+      @cart.add_product(@product, quantity)
       
       event_store.publish(
         ItemAddedToCart.new(data: {
@@ -133,6 +65,49 @@ class CartsController < ApplicationController
       
       render json: {
         cart_id: @cart.id,
+        message: 'Cart created and item added successfully',
+        products: @cart.products_list,
+        total_price: @cart.total_price
+      }, status: :created
+    rescue ActiveRecord::RecordNotFound
+      render json: { error: 'Product not found' }, status: :not_found
+    rescue ActiveRecord::RecordInvalid => e
+      render json: { errors: e.record.errors.full_messages }, status: :unprocessable_entity
+    end
+  end
+
+  # POST /cart/add_item
+  def add_item
+    begin
+      @cart = Cart.find_by(session_id: current_session_id)
+      
+      unless @cart
+        return render json: { error: 'Cart not found. Please create a cart first.' }, status: :not_found
+      end
+      
+      quantity = params[:quantity]&.to_i || 1
+      
+      if quantity <= 0
+        return render json: { error: 'Quantity must be greater than 0' }, status: :unprocessable_entity
+      end
+      
+      @cart.add_product(@product, quantity)
+      
+      event_store.publish(
+        ItemAddedToCart.new(data: {
+          id: @cart.id,
+          product_id: @product.id,
+          quantity: quantity,
+          product_name: @product.name,
+          product_price: @product.price.to_f,
+          session_id: @cart.session_id,
+          added_at: Time.current
+        })
+      )
+      
+      response.headers['X-Session-ID'] = @cart.session_id
+      render json: {
+        cart_id: @cart.id,
         message: 'Item added to cart successfully',
         products: @cart.products_list,
         total_price: @cart.total_price
@@ -144,6 +119,9 @@ class CartsController < ApplicationController
 
   # DELETE /cart/:product_id
   def remove_item
+    unless @cart
+      return render json: { error: 'Cart not found' }, status: :not_found
+    end
     
     cart_item = @cart.cart_items.find_by(product: @product)
     unless cart_item
@@ -175,8 +153,16 @@ class CartsController < ApplicationController
 
   private
 
+  def generate_session_id
+    request.headers['X-Session-ID'] || SecureRandom.hex(16)
+  end
+
   def event_store
     Rails.configuration.event_store
+  end
+
+  def find_cart_by_session
+    @cart = Cart.find_by(session_id: current_session_id)
   end
 
   def find_cart_by_id
@@ -199,7 +185,7 @@ class CartsController < ApplicationController
   end
 
   def add_item_params
-    params.permit(:product_id, :quantity, :cart_id)
+    params.permit(:product_id, :quantity, :cart_id, :session_id)
   end
 
   def update_item_params
