@@ -10,14 +10,17 @@ gem "bootsnap", require: false
 gem 'redis', '~> 5.2'
 gem 'sidekiq', '~> 7.2', '>= 7.2.4'
 gem 'sidekiq-scheduler', '~> 5.0', '>= 5.0.3'
+gem 'sidekiq-cron', '~> 1.0'
 
 gem 'guard'
 gem 'guard-livereload', require: false
+gem 'rails_event_store', '~> 2.0'
 
 
 group :development, :test do
   gem "debug", platforms: %i[ mri windows ]
   gem 'rspec-rails', '~> 6.1.0'
+  gem 'factory_bot_rails', '~> 6.4'
 end
 
 group :development do
