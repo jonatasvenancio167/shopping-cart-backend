@@ -11,19 +11,7 @@ class CartsController < ApplicationController
       return render json: { error: 'Cart not found' }, status: :not_found
     end
     
-    render json: {
-      id: @cart.id,
-      products: @cart.cart_items.includes(:product).map do |cart_item|
-        {
-          id: cart_item.product.id,
-          name: cart_item.product.name,
-          quantity: cart_item.quantity,
-          unit_price: cart_item.product.price,
-          total_price: cart_item.total_price
-        }
-      end,
-      total_price: @cart.total_price
-    }
+    render json: CartSerializer.new(@cart).as_json
   end
 
   
@@ -63,12 +51,9 @@ class CartsController < ApplicationController
         })
       )
       
-      render json: {
-        cart_id: @cart.id,
-        message: 'Cart created and item added successfully',
-        products: @cart.products_list,
-        total_price: @cart.total_price
-      }, status: :created
+      cart_data = CartSerializer.new(@cart).as_json_with_cart_id
+      cart_data[:message] = 'Cart created and item added successfully'
+      render json: cart_data, status: :created
     rescue ActiveRecord::RecordNotFound
       render json: { error: 'Product not found' }, status: :not_found
     rescue ActiveRecord::RecordInvalid => e
@@ -106,12 +91,9 @@ class CartsController < ApplicationController
       )
       
       response.headers['X-Session-ID'] = @cart.session_id
-      render json: {
-        cart_id: @cart.id,
-        message: 'Item added to cart successfully',
-        products: @cart.products_list,
-        total_price: @cart.total_price
-      }, status: :created
+      cart_data = CartSerializer.new(@cart).as_json_with_cart_id
+      cart_data[:message] = 'Item added to cart successfully'
+      render json: cart_data, status: :created
     rescue ActiveRecord::RecordInvalid => e
       render json: { errors: e.record.errors.full_messages }, status: :unprocessable_entity
     end
@@ -144,11 +126,7 @@ class CartsController < ApplicationController
       })
     )
     
-    render json: {
-      cart_id: @cart.id,
-      products: @cart.products_list,
-      total_price: @cart.total_price
-    }
+    render json: CartSerializer.new(@cart).as_json_with_cart_id
   end
 
   private
