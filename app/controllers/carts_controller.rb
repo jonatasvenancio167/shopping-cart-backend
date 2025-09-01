@@ -22,28 +22,22 @@ class CartsController < ApplicationController
   
   # POST /cart
   def create
-    session_id = session.id.to_s.presence || SecureRandom.hex(16)
-    @cart = Cart.find_by(session_id: session_id)
+    session_id = SecureRandom.hex(16)
+    @cart = Cart.new(session_id: session_id)
+    @cart.total_price = 0
     
-    if @cart.nil?
-      @cart = Cart.new(session_id: session_id)
-      @cart.total_price = 0
-      
-      unless @cart.save
-        render json: { errors: @cart.errors.full_messages }, status: :unprocessable_entity
-        return
-      end
-      
-      session[:cart_id] = @cart.id
-      
-      event_store.publish(
-        CartCreated.new(data: {
-          cart_id: @cart.id,
-          session_id: @cart.session_id,
-          created_at: @cart.created_at
-        })
-      )
+    unless @cart.save
+      render json: { errors: @cart.errors.full_messages }, status: :unprocessable_entity
+      return
     end
+    
+    event_store.publish(
+      CartCreated.new(data: {
+        cart_id: @cart.id,
+        session_id: @cart.session_id,
+        created_at: @cart.created_at
+      })
+    )
     
     if params[:product_id].present?
       product = Product.find_by(id: params[:product_id])
@@ -186,12 +180,12 @@ class CartsController < ApplicationController
   end
 
   def find_cart_by_id
-    cart_id = params[:id] || params[:cart_id] || session[:cart_id]
+    cart_id = params[:id] || params[:cart_id]
     
     if cart_id.present?
       @cart = Cart.find(cart_id)
     else
-      render json: { error: 'No active cart found' }, status: :not_found
+      render json: { error: 'Cart ID is required' }, status: :bad_request
       return
     end
   rescue ActiveRecord::RecordNotFound
